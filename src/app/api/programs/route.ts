@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
             parts: program.parts.map((part: IProgramPart) => ({
                 partNumber: part.partNumber,
                 partType: part.partType,
-                isAssigned: !!part.assignedTo,
+                isAssigned: !!part.assignedTo || !!part.guestName,
                 isCompleted: part.isCompleted,
             })),
         }));

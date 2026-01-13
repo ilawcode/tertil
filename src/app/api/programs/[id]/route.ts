@@ -68,7 +68,7 @@ export async function GET(
         const maskedParts = program.parts.map((part) => ({
             partNumber: part.partNumber,
             partType: part.partType,
-            isAssigned: !!part.assignedTo,
+            isAssigned: !!part.assignedTo || !!part.guestName,
             isCompleted: part.isCompleted,
             assignedTo: part.assignedTo ? {
                 firstName: (part as unknown as { assignedToInfo?: { firstName: string } }).assignedToInfo?.firstName || 'Anonim',

@@ -444,6 +444,8 @@ export default function ProgramDetailPage() {
         return types[type] || type;
     };
 
+
+
     return (
         <div className="py-5" style={{ background: '#f8fafc', minHeight: '100vh' }}>
             <div className="container">
@@ -535,6 +537,18 @@ export default function ProgramDetailPage() {
                                 </div>
                             </div>
 
+                            {/* Participants Button */}
+                            <button
+                                onClick={() => {
+                                    setShowParticipants(true);
+                                    fetchParticipants();
+                                }}
+                                className="btn btn-outline-secondary w-100 mb-3"
+                            >
+                                <i className="bi bi-people me-2"></i>
+                                Katılımcı Listesi
+                            </button>
+
                             {/* Live indicator */}
                             <div className="d-flex align-items-center justify-content-center gap-2 text-muted small">
                                 <span className="bg-success rounded-circle" style={{ width: '8px', height: '8px', animation: 'pulse 2s infinite' }}></span>
@@ -607,7 +621,7 @@ export default function ProgramDetailPage() {
                         </div>
 
                         {/* Action Buttons */}
-                        {authStatus === 'authenticated' ? (
+                        {true && (
                             <div className="card-tertil p-4">
                                 {/* Show join button if user has selected parts */}
                                 {selectedParts.length > 0 && (
@@ -624,7 +638,7 @@ export default function ProgramDetailPage() {
                                             ))}
                                         </div>
                                         <button
-                                            onClick={handleJoin}
+                                            onClick={() => handleJoin()}
                                             disabled={processingJoin}
                                             className="btn btn-tertil btn-lg w-100"
                                         >
@@ -636,7 +650,7 @@ export default function ProgramDetailPage() {
                                             ) : (
                                                 <>
                                                     <i className="bi bi-check-lg me-2"></i>
-                                                    Programa Katıl
+                                                    {program.isCreator && !program.isPublic ? 'Katılımcı Ekle' : 'Programa Katıl'}
                                                 </>
                                             )}
                                         </button>
@@ -646,7 +660,9 @@ export default function ProgramDetailPage() {
                                 {/* Show my participation */}
                                 {myParticipation && myParticipation.myParts.length > 0 && (
                                     <div>
-                                        <h5 className="fw-bold text-dark mb-3">Katılımınız</h5>
+                                        <h5 className="fw-bold text-dark mb-3">
+                                            {session ? 'Katılımınız' : 'Misafir Katılımınız'}
+                                        </h5>
                                         <div className="alert alert-success d-flex align-items-center mb-3">
                                             <i className="bi bi-check-circle me-2"></i>
                                             Bu programda {myParticipation.myParts.length} kısım aldınız.
@@ -680,21 +696,128 @@ export default function ProgramDetailPage() {
                                     <div className="text-center text-muted py-3">
                                         <i className="bi bi-hand-index fs-3 mb-2 d-block"></i>
                                         <span>Yukarıdan kısımları seçerek programa katılabilirsiniz</span>
+
+                                        {authStatus === 'unauthenticated' && (
+                                            <div className="mt-3 small">
+                                                Hesabınız var mı? <Link href="/auth/login" className="text-tertil fw-bold">Giriş Yapın</Link>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
-                            </div>
-                        ) : (
-                            <div className="card-tertil p-4 text-center">
-                                <p className="text-muted mb-3">Programa katılmak için giriş yapın</p>
-                                <Link href="/auth/login" className="btn btn-tertil">
-                                    <i className="bi bi-box-arrow-in-right me-2"></i>
-                                    Giriş Yap
-                                </Link>
                             </div>
                         )}
                     </div>
                 </div>
             </div>
+
+            {/* Guest/Participant Name Modal */}
+            {showGuestModal && (
+                <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+                    <div className="modal-dialog modal-dialog-centered">
+                        <div className="modal-content">
+                            <div className="modal-header border-0">
+                                <h5 className="modal-title">
+                                    {program.isCreator && !program.isPublic ? 'Katılımcı Ekle' : 'Bilgilerinizi Girin'}
+                                </h5>
+                                <button type="button" className="btn-close" onClick={() => setShowGuestModal(false)}></button>
+                            </div>
+                            <div className="modal-body">
+                                <p className="text-muted mb-3">
+                                    {program.isCreator && !program.isPublic
+                                        ? 'Bu özel bir program. Ekleyeceğiniz katılımcının adını girin:'
+                                        : 'Programa katılmak için adınızı ve soyadınızı girin:'}
+                                </p>
+                                <input
+                                    type="text"
+                                    className="form-control form-control-lg mb-3"
+                                    placeholder="Ad Soyad"
+                                    value={guestName}
+                                    onChange={(e) => setGuestName(e.target.value)}
+                                    autoFocus
+                                />
+                                <div className="d-grid">
+                                    <button
+                                        className="btn btn-tertil btn-lg"
+                                        onClick={handleGuestJoin}
+                                        disabled={!guestName.trim()}
+                                    >
+                                        Devam Et
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Participants List Modal */}
+            {showParticipants && (
+                <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+                    <div className="modal-dialog modal-dialog-centered modal-lg">
+                        <div className="modal-content" style={{ maxHeight: '80vh' }}>
+                            <div className="modal-header">
+                                <h5 className="modal-title">Katılımcı Listesi</h5>
+                                <button type="button" className="btn-close" onClick={() => setShowParticipants(false)}></button>
+                            </div>
+                            <div className="modal-body overflow-auto">
+                                {/* Export Buttons */}
+                                <div className="d-flex gap-2 mb-3">
+                                    <button
+                                        className="btn btn-outline-success btn-sm flex-grow-1"
+                                        onClick={() => copyToClipboard(exportData.whatsapp, 'WhatsApp')}
+                                    >
+                                        <i className="bi bi-whatsapp me-2"></i>
+                                        WhatsApp İçin Kopyala
+                                    </button>
+                                    <button
+                                        className="btn btn-outline-secondary btn-sm flex-grow-1"
+                                        onClick={() => copyToClipboard(exportData.text, 'Metin')}
+                                    >
+                                        <i className="bi bi-clipboard me-2"></i>
+                                        Listeyi Kopyala
+                                    </button>
+                                </div>
+
+                                {loadingParticipants ? (
+                                    <div className="text-center py-4">
+                                        <div className="spinner-border text-tertil" role="status"></div>
+                                    </div>
+                                ) : participants.length === 0 ? (
+                                    <p className="text-center text-muted py-4">Henüz katılımcı yok</p>
+                                ) : (
+                                    <div className="list-group list-group-flush">
+                                        {participants.map((p, idx) => (
+                                            <div key={idx} className="list-group-item px-0 py-3">
+                                                <div className="d-flex justify-content-between align-items-center">
+                                                    <div>
+                                                        <h6 className="mb-1 fw-semibold">{p.name}</h6>
+                                                        <small className="text-muted">
+                                                            {p.parts.map(part => program.programType === 'hatim' ? `${part}. Cüz` : `#${part}`).join(', ')}
+                                                        </small>
+                                                    </div>
+                                                    <div>
+                                                        {p.completedParts.length === p.parts.length ? (
+                                                            <span className="badge bg-success-soft text-success">
+                                                                <i className="bi bi-check-circle me-1"></i>
+                                                                Tamamlandı
+                                                            </span>
+                                                        ) : (
+                                                            <span className="badge bg-warning-soft text-warning">
+                                                                <i className="bi bi-hourglass-split me-1"></i>
+                                                                Okunuyor
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* CSS for animations */}
             <style jsx>{`
