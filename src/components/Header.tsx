@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useSession, signOut } from 'next-auth/react';
 import { useLocale } from '@/context/LocaleContext';
@@ -9,12 +9,26 @@ export function Header() {
     const { t, locale, setLocale } = useLocale();
     const { data: session, status } = useSession();
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
+    const profileDropdownRef = useRef<HTMLDivElement>(null);
 
     const toggleLocale = () => {
         setLocale(locale === 'tr' ? 'en' : 'tr');
     };
 
     const isAdmin = session?.user?.role === 'admin';
+
+    useEffect(() => {
+        function handleClickOutside(event: MouseEvent) {
+            if (profileDropdownRef.current && !profileDropdownRef.current.contains(event.target as Node)) {
+                setProfileDropdownOpen(false);
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, []);
 
     return (
         <nav className="navbar navbar-expand-lg navbar-tertil sticky-top">
@@ -90,12 +104,12 @@ export function Header() {
                                 <span className="visually-hidden">Loading...</span>
                             </div>
                         ) : session ? (
-                            <div className="dropdown">
+                            <div className="dropdown" ref={profileDropdownRef}>
                                 <button
-                                    className="btn btn-sm btn-light dropdown-toggle d-flex align-items-center gap-2"
+                                    className={`btn btn-sm btn-light dropdown-toggle d-flex align-items-center gap-2 ${profileDropdownOpen ? 'show' : ''}`}
                                     type="button"
-                                    data-bs-toggle="dropdown"
-                                    aria-expanded="false"
+                                    onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
+                                    aria-expanded={profileDropdownOpen}
                                 >
                                     <div className="d-flex align-items-center justify-content-center rounded-circle bg-tertil text-white fw-bold"
                                         style={{ width: '28px', height: '28px', fontSize: '12px' }}>
@@ -103,27 +117,27 @@ export function Header() {
                                     </div>
                                     <span className="d-none d-sm-inline">{session.user.firstName}</span>
                                 </button>
-                                <ul className="dropdown-menu dropdown-menu-end">
+                                <ul className={`dropdown-menu dropdown-menu-end ${profileDropdownOpen ? 'show' : ''}`}>
                                     <li className="dropdown-header">
                                         <div className="fw-semibold">{session.user.firstName} {session.user.lastName}</div>
                                         <small className="text-muted">{session.user.email}</small>
                                     </li>
                                     <li><hr className="dropdown-divider" /></li>
                                     <li>
-                                        <Link href="/profile" className="dropdown-item" onClick={() => setMobileMenuOpen(false)}>
+                                        <Link href="/profile" className="dropdown-item" onClick={() => { setProfileDropdownOpen(false); setMobileMenuOpen(false); }}>
                                             <i className="bi bi-person me-2"></i>
                                             {t.nav.profile}
                                         </Link>
                                     </li>
                                     <li>
-                                        <Link href="/dashboard" className="dropdown-item" onClick={() => setMobileMenuOpen(false)}>
+                                        <Link href="/dashboard" className="dropdown-item" onClick={() => { setProfileDropdownOpen(false); setMobileMenuOpen(false); }}>
                                             <i className="bi bi-grid me-2"></i>
                                             {t.nav.dashboard}
                                         </Link>
                                     </li>
                                     {isAdmin && (
                                         <li>
-                                            <Link href="/admin" className="dropdown-item" onClick={() => setMobileMenuOpen(false)}>
+                                            <Link href="/admin" className="dropdown-item" onClick={() => { setProfileDropdownOpen(false); setMobileMenuOpen(false); }}>
                                                 <i className="bi bi-shield me-2"></i>
                                                 {t.nav.admin}
                                             </Link>
@@ -132,7 +146,7 @@ export function Header() {
                                     <li><hr className="dropdown-divider" /></li>
                                     <li>
                                         <button
-                                            onClick={() => signOut({ callbackUrl: '/' })}
+                                            onClick={() => { setProfileDropdownOpen(false); signOut({ callbackUrl: '/' }); }}
                                             className="dropdown-item text-danger"
                                         >
                                             <i className="bi bi-box-arrow-right me-2"></i>
