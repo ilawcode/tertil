@@ -73,6 +73,12 @@ export async function GET(
             assignedTo: part.assignedTo ? {
                 firstName: (part as unknown as { assignedToInfo?: { firstName: string } }).assignedToInfo?.firstName || 'Anonim',
             } : null,
+            hizbs: part.hizbs?.map(h => ({
+                hizbNumber: h.hizbNumber,
+                isAssigned: !!h.assignedTo || !!h.guestName,
+                isCompleted: h.isCompleted,
+                assignedTo: h.assignedTo ? { firstName: 'Anonim' } : null // Simple masking
+            }))
         }));
 
         return NextResponse.json({

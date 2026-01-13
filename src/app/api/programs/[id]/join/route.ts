@@ -8,7 +8,7 @@ import User from '@/models/User';
 import mongoose from 'mongoose';
 import { sendEmail, getProgramCompletedEmail } from '@/lib/email';
 
-// POST - Join a program and select parts (supports guest users)
+// POST - Join a program and select parts (supports guest users, hizb selection, and proxy assignment)
 export async function POST(
     request: NextRequest,
     { params }: { params: Promise<{ id: string }> }
@@ -25,18 +25,28 @@ export async function POST(
         }
 
         const body = await request.json();
-        const { parts, guestName, participantName } = body;
+        const { parts, selections, guestName, participantName } = body;
 
-        // For guest users, guestName is required
-        // For private programs, participantName is used when owner adds someone
-        if (!session?.user?.id && !guestName) {
+        // Logic to determine if we are assigning to a specific name (Guest or Proxy)
+        // If a name is provided, we prioritize using it as a guest assignment
+        const targetName = participantName || guestName;
+        const isGuest = !!targetName || !session?.user?.id;
+
+        if (!session?.user?.id && !targetName) {
             return NextResponse.json(
                 { error: 'Ad ve soyad bilgisi gereklidir' },
                 { status: 400 }
             );
         }
 
-        if (!parts || !Array.isArray(parts) || parts.length === 0) {
+        // Normalize selections to { partNumber, hizbNumber? }[]
+        let requestSelections: { partNumber: number; hizbNumber?: number }[] = [];
+
+        if (selections && Array.isArray(selections)) {
+            requestSelections = selections;
+        } else if (parts && Array.isArray(parts)) {
+            requestSelections = parts.map((p: number) => ({ partNumber: p }));
+        } else {
             return NextResponse.json(
                 { error: 'Lütfen en az bir kısım seçin' },
                 { status: 400 }
@@ -61,7 +71,7 @@ export async function POST(
             );
         }
 
-        // Check if this is a private program
+        // Check internal access for private programs
         const isOwner = session?.user?.id === program.createdBy?.toString();
         const isAdmin = session?.user?.role === 'admin';
 
@@ -72,60 +82,113 @@ export async function POST(
             );
         }
 
-        // For private programs, owner can add participants with participantName
-        const isAddingForOther = !program.isPublic && (isOwner || isAdmin) && participantName;
+        // Check availability and conflicts
+        const conflictParts: string[] = [];
 
-        // Check if parts are available
-        const unavailableParts = parts.filter((partNum: number) => {
-            const part = program.parts.find((p) => p.partNumber === partNum);
-            return !part || part.assignedTo || part.guestName;
-        });
+        for (const selection of requestSelections) {
+            const { partNumber, hizbNumber } = selection;
+            const part = program.parts.find((p) => p.partNumber === partNumber);
 
-        if (unavailableParts.length > 0) {
+            if (!part) {
+                conflictParts.push(`#${partNumber} (Bulunamadı)`);
+                continue;
+            }
+
+            // Check if Full Part is already assigned
+            if (part.assignedTo || part.guestName) {
+                conflictParts.push(`#${partNumber} (Tamamı Alınmış)`);
+                continue;
+            }
+
+            if (hizbNumber) {
+                // Joining specific Hizb
+                // Check if this specific hizb is taken
+                if (part.hizbs && part.hizbs.length > 0) {
+                    const existingHizb = part.hizbs.find(h => h.hizbNumber === hizbNumber);
+                    if (existingHizb && (existingHizb.assignedTo || existingHizb.guestName)) {
+                        conflictParts.push(`#${partNumber}. Cüz ${hizbNumber}. Hizb`);
+                    }
+                }
+            } else {
+                // Joining Full Part (Cüz)
+                // Check if ANY sub-part (hizb) is taken
+                if (part.hizbs && part.hizbs.some(h => h.assignedTo || h.guestName)) {
+                    conflictParts.push(`#${partNumber} (Parçalı Alınmış)`);
+                }
+            }
+        }
+
+        if (conflictParts.length > 0) {
             return NextResponse.json(
                 {
-                    error: `${unavailableParts.join(', ')} numaralı kısımlar müsait değil`,
-                    conflictParts: unavailableParts
+                    error: `Seçilen kısımlar müsait değil: ${conflictParts.join(', ')}`,
+                    conflictParts
                 },
                 { status: 409 }
             );
         }
 
-        // Determine participant info
-        const isGuest = !session?.user?.id || isAddingForOther;
-        const finalGuestName = isAddingForOther ? participantName : guestName;
+        // Apply assignments
+        for (const selection of requestSelections) {
+            const { partNumber, hizbNumber } = selection;
+            const part = program.parts.find((p) => p.partNumber === partNumber);
 
-        // Assign parts
-        program.parts.forEach((part) => {
-            if (parts.includes(part.partNumber)) {
+            if (!part) continue;
+
+            if (hizbNumber) {
+                // Assign Hizb
+                // Initialize hizbs if needed
+                if (!part.hizbs || part.hizbs.length === 0) {
+                    part.hizbs = [1, 2, 3, 4].map(h => ({ hizbNumber: h, isCompleted: false }));
+                }
+
+                const hizb = part.hizbs.find(h => h.hizbNumber === hizbNumber);
+                if (hizb) {
+                    if (isGuest) {
+                        hizb.guestName = targetName;
+                    } else {
+                        hizb.assignedTo = new mongoose.Types.ObjectId(session!.user.id);
+                    }
+                    hizb.assignedAt = new Date();
+                }
+            } else {
+                // Assign Full Part
                 if (isGuest) {
-                    part.guestName = finalGuestName;
+                    part.guestName = targetName;
                 } else {
                     part.assignedTo = new mongoose.Types.ObjectId(session!.user.id);
                 }
                 part.assignedAt = new Date();
             }
-        });
+        }
 
-        // Create participation record
+        // Create/Update Participation Record
+        // Note: For simplicity, we store the main part number in the participation 'parts' array.
+        // If we want detailed tracking in 'Participation' model, we might need to update that schema too.
+        // For now, we will store partNumber. Ideally, we should store {part, hizb}.
+        // BUT, given the scope, let's keep participation 'parts' as simple numbers for "Overview",
+        // trusting Program model for detailed state. 
+        // OR we just push the partNumber. If it's a hizb, we still "participated" in that part.
+
+        const partNumbers = [...new Set(requestSelections.map(s => s.partNumber))];
+
         if (isGuest) {
-            // Check if guest already has participation
             const existingGuest = await Participation.findOne({
                 programId: id,
-                guestName: finalGuestName,
+                guestName: targetName,
                 isGuest: true,
             });
 
             if (existingGuest) {
                 await Participation.findByIdAndUpdate(existingGuest._id, {
-                    $addToSet: { parts: { $each: parts } },
+                    $addToSet: { parts: { $each: partNumbers } },
                 });
             } else {
                 program.totalParticipants += 1;
                 await Participation.create({
                     programId: id,
-                    guestName: finalGuestName,
-                    parts: parts,
+                    guestName: targetName,
+                    parts: partNumbers,
                     isGuest: true,
                     addedBy: session?.user?.id ? new mongoose.Types.ObjectId(session.user.id) : undefined,
                     joinedAt: new Date(),
@@ -144,7 +207,7 @@ export async function POST(
             await Participation.findOneAndUpdate(
                 { userId: session!.user.id, programId: id },
                 {
-                    $addToSet: { parts: { $each: parts } },
+                    $addToSet: { parts: { $each: partNumbers } },
                     $setOnInsert: { joinedAt: new Date(), isGuest: false },
                 },
                 { upsert: true }
@@ -155,8 +218,9 @@ export async function POST(
 
         return NextResponse.json({
             message: 'Başarıyla katıldınız!',
-            selectedParts: parts,
+            selectedParts: requestSelections,
         });
+
     } catch (error) {
         console.error('Error joining program:', error);
         return NextResponse.json(

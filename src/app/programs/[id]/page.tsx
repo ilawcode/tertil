@@ -8,6 +8,16 @@ import { useLocale } from '@/context/LocaleContext';
 import { format } from 'date-fns';
 import { tr as trLocale, enUS } from 'date-fns/locale';
 
+interface Hizb {
+    hizbNumber: number;
+    isAssigned: boolean;
+    isCompleted: boolean;
+    guestName?: string;
+    assignedTo?: {
+        firstName: string;
+    };
+}
+
 interface Part {
     partNumber: number;
     partType: string;
@@ -17,6 +27,7 @@ interface Part {
     assignedTo?: {
         firstName: string;
     };
+    hizbs?: Hizb[];
 }
 
 interface Program {
@@ -65,6 +76,7 @@ export default function ProgramDetailPage() {
     const [myParticipation, setMyParticipation] = useState<MyParticipation | null>(null);
     const [loading, setLoading] = useState(true);
     const [selectedParts, setSelectedParts] = useState<number[]>([]);
+    const [selectedHizbs, setSelectedHizbs] = useState<Record<number, number[]>>({});
     const [viewMode, setViewMode] = useState<'cuz' | 'hizb'>('cuz');
     const [processingJoin, setProcessingJoin] = useState(false);
     const [processingComplete, setProcessingComplete] = useState(false);
@@ -135,6 +147,17 @@ export default function ProgramDetailPage() {
         // If it's my part, don't allow deselection from here
         if (isMyPart) return;
 
+        // Check if sub-parts (hizbs) are taken
+        const part = program?.parts.find(p => p.partNumber === partNumber);
+        const hasSubPartsTaken = part?.hizbs?.some(h => h.isAssigned || h.isCompleted);
+
+        if (hasSubPartsTaken) {
+            setError('Bu cüz parçalı olarak alınmış, lütfen Hizb görünümünden seçim yapın.');
+            setTimeout(() => setError(''), 3000);
+            setViewMode('hizb');
+            return;
+        }
+
         // Toggle selection
         setSelectedParts((prev) => {
             if (prev.includes(partNumber)) {
@@ -142,12 +165,55 @@ export default function ProgramDetailPage() {
             }
             return [...prev, partNumber];
         });
+
+        // Clear any hizb selection for this part if full part is selected
+        setSelectedHizbs(prev => {
+            const copy = { ...prev };
+            delete copy[partNumber];
+            return copy;
+        });
+
         setConflictParts((prev) => prev.filter((p) => p !== partNumber));
     };
 
-    // Join program (for logged-in users)
+    // Handle Hizb selection
+    const handleHizbClick = (partNumber: number, hizbNumber: number) => {
+        // Find part and hizb logic check
+        const part = program?.parts.find(p => p.partNumber === partNumber);
+        const hizb = part?.hizbs?.find(h => h.hizbNumber === hizbNumber);
+
+        if (hizb?.isAssigned || hizb?.isCompleted) {
+            setError('Bu hizb alınmış');
+            setTimeout(() => setError(''), 2000);
+            return;
+        }
+
+        setSelectedHizbs(prev => {
+            const current = prev[partNumber] || [];
+            if (current.includes(hizbNumber)) {
+                const updated = current.filter(h => h !== hizbNumber);
+                if (updated.length === 0) {
+                    const copy = { ...prev };
+                    delete copy[partNumber];
+                    return copy;
+                }
+                return { ...prev, [partNumber]: updated };
+            }
+            return { ...prev, [partNumber]: [...current, hizbNumber] };
+        });
+
+        // Ensure full part is NOT selected
+        if (selectedParts.includes(partNumber)) {
+            setSelectedParts(prev => prev.filter(p => p !== partNumber));
+        }
+    };
+
+    // Join program
     const handleJoin = async (asGuest = false, name = '') => {
-        if (selectedParts.length === 0) {
+        const hasParts = selectedParts.length > 0;
+        const hasHizbs = Object.values(selectedHizbs).some(arr => arr.length > 0);
+
+        if (!hasParts && !hasHizbs) {
             setError('Lütfen en az bir kısım seçin');
             return;
         }
@@ -158,27 +224,23 @@ export default function ProgramDetailPage() {
             return;
         }
 
-        // Check for conflicts before joining
-        const currentAssigned = program?.parts.filter(p => p.isAssigned && !myParticipation?.myParts.includes(p.partNumber)).map(p => p.partNumber) || [];
-        const conflicts = selectedParts.filter(p => currentAssigned.includes(p));
-
-        if (conflicts.length > 0) {
-            setConflictParts(conflicts);
-            setError(`${conflicts.length} kısım başkası tarafından seçilmiş. Lütfen sayfayı yenileyin.`);
-            fetchProgram(false);
-            return;
-        }
-
         setProcessingJoin(true);
         setError('');
 
         try {
-            const body: { parts: number[]; guestName?: string; participantName?: string } = { parts: selectedParts };
+            const selections = [
+                ...selectedParts.map(p => ({ partNumber: p })),
+                ...Object.entries(selectedHizbs).flatMap(([pNum, hizbs]) =>
+                    hizbs.map(h => ({ partNumber: Number(pNum), hizbNumber: h }))
+                )
+            ];
+
+            const body: { selections: any[]; guestName?: string; participantName?: string } = { selections };
 
             if (asGuest || !session?.user?.id) {
                 body.guestName = name;
-            } else if (program?.isCreator && !program?.isPublic && name) {
-                // Owner adding participant to private program
+            } else if (program?.isCreator && name) {
+                // Owner adding participant (proxy) - works for both Public and Private
                 body.participantName = name;
             }
 
@@ -193,12 +255,13 @@ export default function ProgramDetailPage() {
             if (response.ok) {
                 setSuccessMessage('Başarıyla katıldınız!');
                 setSelectedParts([]);
+                setSelectedHizbs({});
                 setShowGuestModal(false);
                 setGuestName('');
                 fetchProgram(false);
                 setTimeout(() => setSuccessMessage(''), 3000);
             } else if (response.status === 409) {
-                setConflictParts(data.conflictParts || selectedParts);
+                setConflictParts(data.conflictParts || []); // This might need mapping back from "Part.Hizb" strings
                 setError(data.error || 'Seçtiğiniz bazı kısımlar başkası tarafından alınmış');
                 fetchProgram(false);
             } else {
@@ -306,7 +369,10 @@ export default function ProgramDetailPage() {
                     const isConflict = conflictParts.includes(part.partNumber);
                     const isSelected = selectedParts.includes(part.partNumber);
 
-                    let className = 'part-item';
+                    const subPartsTaken = part.hizbs?.some(h => h.isAssigned || h.isCompleted);
+                    const anyHizbSelected = selectedHizbs[part.partNumber]?.length > 0;
+
+                    let className = 'part-item position-relative';
                     let tooltip = '';
 
                     if (part.isCompleted) {
@@ -321,6 +387,9 @@ export default function ProgramDetailPage() {
                     } else if (isSelected) {
                         className += ' selected';
                         tooltip = 'Seçildi';
+                    } else if (subPartsTaken) {
+                        className += ' available';
+                        tooltip = 'Parçalı alınmış, seçmek için Hizb görünümüne geçin';
                     } else {
                         className += ' available';
                         tooltip = 'Seçilebilir';
@@ -336,9 +405,22 @@ export default function ProgramDetailPage() {
                                 className={className}
                                 onClick={() => handlePartClick(part.partNumber, part.isAssigned, part.isCompleted, isMyPart)}
                                 title={tooltip}
-                                style={isConflict ? { animation: 'shake 0.5s ease-in-out', borderColor: '#ef4444' } : {}}
+                                style={{
+                                    ...(isConflict ? { animation: 'shake 0.5s ease-in-out', borderColor: '#ef4444' } : {}),
+                                    ...(subPartsTaken && !part.isAssigned ? {
+                                        backgroundImage: 'linear-gradient(45deg, #ffffff 25%, #e9ecef 25%, #e9ecef 50%, #ffffff 50%, #ffffff 75%, #e9ecef 75%, #e9ecef 100%)',
+                                        backgroundSize: '10px 10px',
+                                        color: '#6c757d'
+                                    } : {})
+                                }}
                             >
                                 {part.partNumber}
+                                {anyHizbSelected && (
+                                    <span className="position-absolute top-0 start-100 translate-middle p-1 bg-success border border-light rounded-circle"
+                                        style={{ width: '10px', height: '10px' }}>
+                                        <span className="visually-hidden">Selected</span>
+                                    </span>
+                                )}
                             </div>
                         </div>
                     );
@@ -394,14 +476,24 @@ export default function ProgramDetailPage() {
                             {/* Hizb indicators - Each cüz has 4 hizb (1-4) */}
                             <div className="d-flex gap-1">
                                 {[1, 2, 3, 4].map((hizbNumber) => {
-                                    const isFilled = part.isAssigned || part.isCompleted;
+                                    const hizbData = part.hizbs?.find(h => h.hizbNumber === hizbNumber);
+                                    const isHizbAssigned = hizbData?.isAssigned || false;
+                                    const isHizbCompleted = hizbData?.isCompleted || false;
+                                    const isHizbSelected = selectedHizbs[part.partNumber]?.includes(hizbNumber);
+
+                                    // Visual state logic
+                                    // If main part is taken, all hizbs are effectively taken
+                                    const isEffectiveTaken = part.isAssigned || part.isCompleted || isHizbAssigned || isHizbCompleted;
 
                                     return (
                                         <div
                                             key={hizbNumber}
-                                            className={`flex-grow-1 rounded text-center py-2 small fw-medium ${part.isCompleted ? 'bg-gold text-dark' :
-                                                isFilled ? 'bg-tertil text-white' :
-                                                    isSelected ? 'bg-success bg-opacity-25 text-success' : 'bg-light text-muted'
+                                            onClick={() => handleHizbClick(part.partNumber, hizbNumber)}
+                                            style={{ cursor: isEffectiveTaken ? 'default' : 'pointer' }}
+                                            className={`flex-grow-1 rounded text-center py-2 small fw-medium ${part.isCompleted || isHizbCompleted ? 'bg-gold text-dark' :
+                                                    part.isAssigned || isHizbAssigned ? 'bg-tertil text-white' :
+                                                        isHizbSelected ? 'bg-success text-white' :
+                                                            isSelected ? 'bg-success bg-opacity-25 text-success' : 'bg-light text-muted'
                                                 }`}
                                         >
                                             {hizbNumber}. Hizb

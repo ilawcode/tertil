@@ -11,6 +11,14 @@ export interface IProgramPart {
     assignedAt?: Date;
     isCompleted: boolean;
     completedAt?: Date;
+    hizbs?: {
+        hizbNumber: number;
+        assignedTo?: mongoose.Types.ObjectId;
+        guestName?: string;
+        assignedAt?: Date;
+        isCompleted: boolean;
+        completedAt?: Date;
+    }[];
 }
 
 export interface IProgram extends Document {
@@ -66,6 +74,16 @@ const ProgramPartSchema = new Schema<IProgramPart>(
         completedAt: {
             type: Date,
         },
+        hizbs: [
+            {
+                hizbNumber: { type: Number, required: true },
+                assignedTo: { type: Schema.Types.ObjectId, ref: 'User' },
+                guestName: { type: String, trim: true },
+                assignedAt: { type: Date },
+                isCompleted: { type: Boolean, default: false },
+                completedAt: { type: Date },
+            }
+        ],
     },
     { _id: false }
 );

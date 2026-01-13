@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
         const page = parseInt(searchParams.get('page') || '1');
         const limit = parseInt(searchParams.get('limit') || '12');
 
-        const query: Record<string, unknown> = { isApproved: true };
+        const query: Record<string, unknown> = { isApproved: true, isPublic: true };
 
         if (status === 'active') {
             query.status = 'active';
