@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
-import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import { authOptions } from '@/lib/auth';
 import connectToDatabase from '@/lib/mongodb';
 import Program from '@/models/Program';
 import Participation from '@/models/Participation';
+
+export const dynamic = 'force-dynamic';
 
 // GET - Fetch user's dashboard data
 export async function GET() {

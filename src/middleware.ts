@@ -20,9 +20,8 @@ export default withAuth(
 
                 // Public routes
                 const publicRoutes = ['/', '/programs', '/auth/login', '/auth/register'];
-                const isPublicRoute =
-                    publicRoutes.includes(pathname) ||
-                    pathname.startsWith('/programs/') && !pathname.includes('/create');
+                const isPublicRoute = publicRoutes.some(route => pathname === route) ||
+                    (pathname.startsWith('/programs/') && !pathname.includes('/create'));
 
                 if (isPublicRoute) {
                     return true;
