@@ -50,16 +50,37 @@ export async function GET(
         // Get user's participation if logged in
         let myParticipation = null;
         if (session?.user?.id) {
-            const participation = await Participation.findOne({
-                userId: session.user.id,
-                programId: id,
-            }).lean();
+            // Build participation from program.parts (more accurate than Participation model)
+            const mySelections: { partNumber: number; hizbNumber?: number; isCompleted: boolean }[] = [];
 
-            if (participation) {
+            program.parts.forEach((part) => {
+                // Check if user owns the full part
+                if (part.assignedTo?.toString() === session.user.id) {
+                    mySelections.push({
+                        partNumber: part.partNumber,
+                        isCompleted: part.isCompleted,
+                    });
+                }
+
+                // Check if user owns any hizbs
+                if (part.hizbs && part.hizbs.length > 0) {
+                    part.hizbs.forEach((hizb) => {
+                        if (hizb.assignedTo?.toString() === session.user.id) {
+                            mySelections.push({
+                                partNumber: part.partNumber,
+                                hizbNumber: hizb.hizbNumber,
+                                isCompleted: hizb.isCompleted,
+                            });
+                        }
+                    });
+                }
+            });
+
+            if (mySelections.length > 0) {
                 myParticipation = {
-                    myParts: participation.parts || [],
-                    completedParts: participation.completedParts || [],
-                    joinedAt: participation.createdAt,
+                    myParts: [...new Set(mySelections.map(s => s.partNumber))],
+                    completedParts: mySelections.filter(s => s.isCompleted).map(s => s.partNumber),
+                    mySelections, // New: detailed selections with hizb info
                 };
             }
         }

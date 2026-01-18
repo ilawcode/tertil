@@ -230,7 +230,7 @@ export async function POST(
     }
 }
 
-// PUT - Mark parts as completed
+// PUT - Mark parts/hizbs as completed
 export async function PUT(
     request: NextRequest,
     { params }: { params: Promise<{ id: string }> }
@@ -247,11 +247,19 @@ export async function PUT(
         }
 
         const body = await request.json();
-        const { parts, guestName } = body;
+        // Support both old format (parts: number[]) and new format (selections: {partNumber, hizbNumber?}[])
+        const { parts, selections, guestName } = body;
 
-        if (!parts || !Array.isArray(parts)) {
+        // Normalize to selections format
+        let requestSelections: { partNumber: number; hizbNumber?: number }[] = [];
+
+        if (selections && Array.isArray(selections)) {
+            requestSelections = selections;
+        } else if (parts && Array.isArray(parts)) {
+            requestSelections = parts.map((p: number) => ({ partNumber: p }));
+        } else {
             return NextResponse.json(
-                { error: 'Parts array is required' },
+                { error: 'Parts or selections array is required' },
                 { status: 400 }
             );
         }
@@ -270,42 +278,77 @@ export async function PUT(
         const isOwner = session?.user?.id === program.createdBy?.toString();
         const isAdmin = session?.user?.role === 'admin';
 
-        // Verify ownership - user can complete their own parts, or owner can complete any
-        if (session?.user?.id) {
-            const userParts = program.parts.filter(
-                (p) => p.assignedTo?.toString() === session.user.id && parts.includes(p.partNumber)
-            );
+        // Update completion status for each selection
+        let totalCompleted = 0;
+        let markedCount = 0;
 
-            if (userParts.length !== parts.length && !isOwner && !isAdmin) {
-                return NextResponse.json(
-                    { error: 'You can only update your own parts' },
-                    { status: 403 }
-                );
-            }
-        }
+        for (const selection of requestSelections) {
+            const { partNumber, hizbNumber } = selection;
+            const part = program.parts.find((p) => p.partNumber === partNumber);
 
-        // Update part completion status
-        let completedCount = 0;
-        program.parts.forEach((part) => {
-            if (parts.includes(part.partNumber)) {
-                // Check if this part belongs to the requester or owner is marking
+            if (!part) continue;
+
+            if (hizbNumber) {
+                // Complete specific hizb
+                const hizb = part.hizbs?.find(h => h.hizbNumber === hizbNumber);
+                if (hizb) {
+                    // Check ownership
+                    const isUsersPart = hizb.assignedTo?.toString() === session?.user?.id;
+                    const isGuestPart = hizb.guestName === guestName;
+
+                    if (isUsersPart || isGuestPart || isOwner || isAdmin) {
+                        hizb.isCompleted = true;
+                        hizb.completedAt = new Date();
+                        markedCount++;
+                    }
+                }
+            } else {
+                // Complete full part
                 const isUsersPart = part.assignedTo?.toString() === session?.user?.id;
                 const isGuestPart = part.guestName === guestName;
 
                 if (isUsersPart || isGuestPart || isOwner || isAdmin) {
                     part.isCompleted = true;
                     part.completedAt = new Date();
+                    markedCount++;
                 }
             }
+        }
+
+        // Calculate total completed parts
+        program.parts.forEach((part) => {
             if (part.isCompleted) {
-                completedCount++;
+                totalCompleted++;
+            } else if (part.hizbs && part.hizbs.length > 0) {
+                // Check if all hizbs are completed for this part
+                const allHizbsCompleted = part.hizbs.every(h => h.isCompleted);
+                if (allHizbsCompleted && part.hizbs.some(h => h.assignedTo || h.guestName)) {
+                    // All assigned hizbs are completed, mark part as partially complete
+                    // But don't count as full part completion unless all 4 hizbs are assigned and completed
+                    const assignedHizbs = part.hizbs.filter(h => h.assignedTo || h.guestName);
+                    if (assignedHizbs.length === 4 && allHizbsCompleted) {
+                        part.isCompleted = true;
+                        part.completedAt = new Date();
+                        totalCompleted++;
+                    }
+                }
             }
         });
 
-        program.completedParts = completedCount;
+        program.completedParts = totalCompleted;
 
         // Check if program is completed
-        if (completedCount === program.parts.length) {
+        const allPartsAssignedAndCompleted = program.parts.every(part => {
+            if (part.isCompleted) return true;
+            // Check if part has all hizbs assigned and completed
+            if (part.hizbs && part.hizbs.length > 0) {
+                const assignedHizbs = part.hizbs.filter(h => h.assignedTo || h.guestName);
+                return assignedHizbs.length === 4 && assignedHizbs.every(h => h.isCompleted);
+            }
+            return false;
+        });
+
+        if (allPartsAssignedAndCompleted) {
             program.status = 'completed';
 
             // Send completion email to program creator
@@ -322,15 +365,17 @@ export async function PUT(
         await program.save();
 
         // Update participation record
+        const partNumbersToUpdateParticipation = [...new Set(requestSelections.map(s => s.partNumber))];
+
         if (session?.user?.id) {
             await Participation.findOneAndUpdate(
                 { userId: session.user.id, programId: id },
-                { $addToSet: { completedParts: { $each: parts } } }
+                { $addToSet: { completedParts: { $each: partNumbersToUpdateParticipation } } }
             );
         } else if (guestName) {
             await Participation.findOneAndUpdate(
                 { programId: id, guestName: guestName, isGuest: true },
-                { $addToSet: { completedParts: { $each: parts } } }
+                { $addToSet: { completedParts: { $each: partNumbersToUpdateParticipation } } }
             );
         }
 
@@ -339,6 +384,7 @@ export async function PUT(
             programStatus: program.status,
             completedParts: program.completedParts,
             totalParts: program.parts.length,
+            markedCount,
         });
     } catch (error) {
         console.error('Error updating parts:', error);

@@ -52,16 +52,28 @@ interface Program {
     };
 }
 
+interface MySelection {
+    partNumber: number;
+    hizbNumber?: number;
+    isCompleted: boolean;
+}
+
 interface MyParticipation {
     myParts: number[];
     completedParts: number[];
+    mySelections?: MySelection[];
+}
+
+interface PartSelection {
+    partNumber: number;
+    hizbNumber?: number;
+    isCompleted: boolean;
 }
 
 interface Participant {
     name: string;
     maskedName: string;
-    parts: number[];
-    completedParts: number[];
+    selections: PartSelection[];
     isGuest: boolean;
 }
 
@@ -94,6 +106,11 @@ export default function ProgramDetailPage() {
     const [participants, setParticipants] = useState<Participant[]>([]);
     const [exportData, setExportData] = useState({ text: '', whatsapp: '' });
     const [loadingParticipants, setLoadingParticipants] = useState(false);
+
+    // Completion modal state (for program owner)
+    const [showCompletionModal, setShowCompletionModal] = useState(false);
+    const [completionSearch, setCompletionSearch] = useState('');
+    const [completingName, setCompletingName] = useState<string | null>(null);
 
     // Fetch program data
     const fetchProgram = useCallback(async (showLoading = true) => {
@@ -307,11 +324,12 @@ export default function ProgramDetailPage() {
         setTimeout(() => setSuccessMessage(''), 2000);
     };
 
-    // Complete my parts
+    // Complete my parts/hizbs
     const handleComplete = async () => {
-        const uncompletedParts = myParticipation?.myParts.filter(p => !myParticipation.completedParts.includes(p)) || [];
+        // Get uncompleted selections from myParticipation.mySelections
+        const uncompletedSelections = myParticipation?.mySelections?.filter(s => !s.isCompleted) || [];
 
-        if (uncompletedParts.length === 0) {
+        if (uncompletedSelections.length === 0) {
             setError('Tamamlanacak kısım yok');
             return;
         }
@@ -323,7 +341,12 @@ export default function ProgramDetailPage() {
             const response = await fetch(`/api/programs/${programId}/join`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ parts: uncompletedParts }),
+                body: JSON.stringify({
+                    selections: uncompletedSelections.map(s => ({
+                        partNumber: s.partNumber,
+                        hizbNumber: s.hizbNumber
+                    }))
+                }),
             });
 
             const data = await response.json();
@@ -339,6 +362,46 @@ export default function ProgramDetailPage() {
             setError('Bir hata oluştu');
         } finally {
             setProcessingComplete(false);
+        }
+    };
+
+    // Mark participant's selections as complete (for program owner)
+    const markParticipantComplete = async (participantName: string, selections: PartSelection[]) => {
+        if (!program?.isCreator) return;
+
+        const uncompletedSelections = selections.filter(s => !s.isCompleted);
+        if (uncompletedSelections.length === 0) {
+            setSuccessMessage('Tüm okumalar zaten tamamlanmış');
+            setTimeout(() => setSuccessMessage(''), 2000);
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/programs/${programId}/join`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    selections: uncompletedSelections.map(s => ({
+                        partNumber: s.partNumber,
+                        hizbNumber: s.hizbNumber
+                    })),
+                    guestName: participantName, // Pass the guest name so API can identify
+                }),
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                setSuccessMessage(`${participantName} için okumalar tamamlandı!`);
+                // Refresh participants list
+                fetchParticipants();
+                fetchProgram(false);
+                setTimeout(() => setSuccessMessage(''), 3000);
+            } else {
+                setError(data.error || 'İşlem başarısız');
+            }
+        } catch {
+            setError('Bir hata oluştu');
         }
     };
 
@@ -491,9 +554,9 @@ export default function ProgramDetailPage() {
                                             onClick={() => handleHizbClick(part.partNumber, hizbNumber)}
                                             style={{ cursor: isEffectiveTaken ? 'default' : 'pointer' }}
                                             className={`flex-grow-1 rounded text-center py-2 small fw-medium ${part.isCompleted || isHizbCompleted ? 'bg-gold text-dark' :
-                                                    part.isAssigned || isHizbAssigned ? 'bg-tertil text-white' :
-                                                        isHizbSelected ? 'bg-success text-white' :
-                                                            isSelected ? 'bg-success bg-opacity-25 text-success' : 'bg-light text-muted'
+                                                part.isAssigned || isHizbAssigned ? 'bg-tertil text-white' :
+                                                    isHizbSelected ? 'bg-success text-white' :
+                                                        isSelected ? 'bg-success bg-opacity-25 text-success' : 'bg-light text-muted'
                                                 }`}
                                         >
                                             {hizbNumber}. Hizb
@@ -547,26 +610,38 @@ export default function ProgramDetailPage() {
                     {t.common.back}
                 </Link>
 
-                {/* Messages */}
-                {successMessage && (
-                    <div className="alert alert-success d-flex align-items-center mb-4">
-                        <i className="bi bi-check-circle me-2"></i>
-                        {successMessage}
-                    </div>
-                )}
+                {/* Messages - Sticky at top */}
+                {(successMessage || error) && (
+                    <div
+                        style={{
+                            position: 'sticky',
+                            top: '70px',
+                            zIndex: 1050,
+                            marginBottom: '1rem'
+                        }}
+                    >
+                        {successMessage && (
+                            <div className="alert alert-success d-flex align-items-center shadow-sm mb-2">
+                                <i className="bi bi-check-circle me-2"></i>
+                                {successMessage}
+                                <button type="button" className="btn-close ms-auto" onClick={() => setSuccessMessage('')}></button>
+                            </div>
+                        )}
 
-                {error && (
-                    <div className="alert alert-danger d-flex align-items-center mb-4">
-                        <i className="bi bi-exclamation-circle me-2"></i>
-                        {error}
-                        <button type="button" className="btn-close ms-auto" onClick={() => setError('')}></button>
+                        {error && (
+                            <div className="alert alert-danger d-flex align-items-center shadow-sm mb-0">
+                                <i className="bi bi-exclamation-circle me-2"></i>
+                                {error}
+                                <button type="button" className="btn-close ms-auto" onClick={() => setError('')}></button>
+                            </div>
+                        )}
                     </div>
                 )}
 
                 <div className="row">
                     {/* Left Column - Program Info */}
                     <div className="col-lg-4 mb-4">
-                        <div className="card-tertil p-4 sticky-lg-top" style={{ top: '80px' }}>
+                        <div className="card-tertil p-4" style={{ position: 'sticky', top: '90px', zIndex: 50, maxHeight: 'calc(100vh - 110px)', overflowY: 'auto' }}>
                             {/* Program Header */}
                             <div className="d-flex align-items-center gap-3 mb-4">
                                 <div className="d-flex align-items-center justify-content-center rounded bg-tertil"
@@ -641,6 +716,20 @@ export default function ProgramDetailPage() {
                                 Katılımcı Listesi
                             </button>
 
+                            {/* Complete Readings Button (only for program owner) */}
+                            {program.isCreator && (
+                                <button
+                                    onClick={() => {
+                                        setShowCompletionModal(true);
+                                        fetchParticipants();
+                                    }}
+                                    className="btn btn-success w-100 mb-3"
+                                >
+                                    <i className="bi bi-check2-all me-2"></i>
+                                    Okumaları Tamamla
+                                </button>
+                            )}
+
                             {/* Live indicator */}
                             <div className="d-flex align-items-center justify-content-center gap-2 text-muted small">
                                 <span className="bg-success rounded-circle" style={{ width: '8px', height: '8px', animation: 'pulse 2s infinite' }}></span>
@@ -651,7 +740,186 @@ export default function ProgramDetailPage() {
 
                     {/* Right Column - Part Selection */}
                     <div className="col-lg-8">
-                        {/* View Mode Toggle (only for Hatim) */}
+
+                        {/* Action Buttons - MOVED ABOVE PART SELECTION */}
+                        {(() => {
+                            const hasParts = selectedParts.length > 0;
+                            const hasHizbs = Object.values(selectedHizbs).some(arr => arr.length > 0);
+                            const totalHizbCount = Object.values(selectedHizbs).reduce((sum, arr) => sum + arr.length, 0);
+                            const hasAnySelection = hasParts || hasHizbs;
+
+                            return hasAnySelection ? (
+                                <div className="card-tertil p-4 mb-4" style={{ position: 'sticky', top: '90px', zIndex: 100, boxShadow: '0 4px 20px rgba(0,0,0,0.1)' }}>
+                                    <h5 className="fw-bold text-dark mb-3">
+                                        <i className="bi bi-check2-square me-2 text-tertil"></i>
+                                        Seçimleriniz
+                                    </h5>
+
+                                    {/* Selected Cüzler */}
+                                    {hasParts && (
+                                        <div className="mb-3">
+                                            <div className="d-flex align-items-center justify-content-between mb-2">
+                                                <span className="fw-semibold text-muted small">Seçilen Cüzler</span>
+                                                <span className="badge bg-tertil">{selectedParts.length} cüz</span>
+                                            </div>
+                                            <div className="d-flex flex-wrap gap-2">
+                                                {selectedParts.sort((a, b) => a - b).map((partNum) => (
+                                                    <span key={partNum} className="badge bg-tertil fs-6 py-2 px-3">
+                                                        {partNum}. Cüz
+                                                        <button
+                                                            type="button"
+                                                            className="btn-close btn-close-white ms-2"
+                                                            style={{ fontSize: '0.6rem' }}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setSelectedParts(prev => prev.filter(p => p !== partNum));
+                                                            }}
+                                                        ></button>
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Selected Hizbler */}
+                                    {hasHizbs && (
+                                        <div className="mb-3">
+                                            <div className="d-flex align-items-center justify-content-between mb-2">
+                                                <span className="fw-semibold text-muted small">Seçilen Hizbler</span>
+                                                <span className="badge bg-success">{totalHizbCount} hizb</span>
+                                            </div>
+                                            <div className="d-flex flex-wrap gap-2">
+                                                {Object.entries(selectedHizbs)
+                                                    .sort(([a], [b]) => Number(a) - Number(b))
+                                                    .map(([partNum, hizbs]) =>
+                                                        hizbs.sort((a, b) => a - b).map((hizbNum) => (
+                                                            <span key={`${partNum}-${hizbNum}`} className="badge bg-success fs-6 py-2 px-3">
+                                                                {partNum}. Cüz - {hizbNum}. Hizb
+                                                                <button
+                                                                    type="button"
+                                                                    className="btn-close btn-close-white ms-2"
+                                                                    style={{ fontSize: '0.6rem' }}
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        setSelectedHizbs(prev => {
+                                                                            const current = prev[Number(partNum)] || [];
+                                                                            const updated = current.filter(h => h !== hizbNum);
+                                                                            if (updated.length === 0) {
+                                                                                const copy = { ...prev };
+                                                                                delete copy[Number(partNum)];
+                                                                                return copy;
+                                                                            }
+                                                                            return { ...prev, [Number(partNum)]: updated };
+                                                                        });
+                                                                    }}
+                                                                ></button>
+                                                            </span>
+                                                        ))
+                                                    )}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Owner can add participant name */}
+                                    {program.isCreator && (
+                                        <div className="mb-3">
+                                            <label className="form-label fw-semibold text-muted small">
+                                                <i className="bi bi-person-plus me-1"></i>
+                                                Katılımcı Adı (opsiyonel)
+                                            </label>
+                                            <input
+                                                type="text"
+                                                className="form-control"
+                                                placeholder="Ad Soyad girin veya boş bırakın"
+                                                value={guestName}
+                                                onChange={(e) => setGuestName(e.target.value)}
+                                            />
+                                            <div className="form-text">Boş bırakırsanız kendiniz için katılım yaparsınız.</div>
+                                        </div>
+                                    )}
+
+                                    <div className="d-grid gap-2">
+                                        <button
+                                            onClick={() => {
+                                                if (program.isCreator && guestName.trim()) {
+                                                    handleJoin(true, guestName);
+                                                } else if (!session?.user?.id) {
+                                                    setShowGuestModal(true);
+                                                } else {
+                                                    handleJoin();
+                                                }
+                                            }}
+                                            disabled={processingJoin}
+                                            className="btn btn-tertil btn-lg"
+                                        >
+                                            {processingJoin ? (
+                                                <>
+                                                    <span className="spinner-border spinner-border-sm me-2" role="status"></span>
+                                                    Katılınıyor...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <i className="bi bi-check-lg me-2"></i>
+                                                    {program.isCreator && guestName.trim()
+                                                        ? `"${guestName}" için Katılımcı Ekle`
+                                                        : program.isCreator && !program.isPublic
+                                                            ? 'Katılımcı Ekle'
+                                                            : 'Programa Katıl'}
+                                                </>
+                                            )}
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setSelectedParts([]);
+                                                setSelectedHizbs({});
+                                                setGuestName('');
+                                            }}
+                                            className="btn btn-outline-secondary"
+                                        >
+                                            <i className="bi bi-x-lg me-2"></i>
+                                            Seçimi Temizle
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : null;
+                        })()}
+
+                        {/* My Participation - Also above selection */}
+                        {myParticipation && myParticipation.myParts.length > 0 && (
+                            <div className="card-tertil p-4 mb-4">
+                                <h5 className="fw-bold text-dark mb-3">
+                                    <i className="bi bi-person-check me-2 text-success"></i>
+                                    {session ? 'Katılımınız' : 'Misafir Katılımınız'}
+                                </h5>
+                                <div className="alert alert-success d-flex align-items-center mb-3">
+                                    <i className="bi bi-check-circle me-2"></i>
+                                    Bu programda {myParticipation.myParts.length} kısım aldınız.
+                                    ({myParticipation.completedParts.length} tamamlandı)
+                                </div>
+
+                                {myParticipation.myParts.some(p => !myParticipation.completedParts.includes(p)) && (
+                                    <button
+                                        onClick={handleComplete}
+                                        disabled={processingComplete}
+                                        className="btn btn-gold btn-lg w-100"
+                                    >
+                                        {processingComplete ? (
+                                            <>
+                                                <span className="spinner-border spinner-border-sm me-2" role="status"></span>
+                                                İşleniyor...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <i className="bi bi-check-all me-2"></i>
+                                                Tüm Okumalarımı Tamamla
+                                            </>
+                                        )}
+                                    </button>
+                                )}
+                            </div>
+                        )}
+
+                        {/* View Mode Toggle (only for Hatim) - Moved above legend */}
                         {program.programType === 'hatim' && (
                             <div className="btn-group mb-4 w-100">
                                 <button
@@ -712,88 +980,16 @@ export default function ProgramDetailPage() {
                             )}
                         </div>
 
-                        {/* Action Buttons */}
-                        {true && (
-                            <div className="card-tertil p-4">
-                                {/* Show join button if user has selected parts */}
-                                {selectedParts.length > 0 && (
-                                    <div className="mb-4">
-                                        <div className="d-flex align-items-center justify-content-between mb-3">
-                                            <span className="fw-semibold">Seçilen Kısımlar</span>
-                                            <span className="badge bg-tertil">{selectedParts.length} adet</span>
-                                        </div>
-                                        <div className="d-flex flex-wrap gap-2 mb-3">
-                                            {selectedParts.sort((a, b) => a - b).map((partNum) => (
-                                                <span key={partNum} className="badge bg-tertil">
-                                                    {program.programType === 'hatim' ? `${partNum}. Cüz` : `#${partNum}`}
-                                                </span>
-                                            ))}
-                                        </div>
-                                        <button
-                                            onClick={() => handleJoin()}
-                                            disabled={processingJoin}
-                                            className="btn btn-tertil btn-lg w-100"
-                                        >
-                                            {processingJoin ? (
-                                                <>
-                                                    <span className="spinner-border spinner-border-sm me-2" role="status"></span>
-                                                    Katılınıyor...
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <i className="bi bi-check-lg me-2"></i>
-                                                    {program.isCreator && !program.isPublic ? 'Katılımcı Ekle' : 'Programa Katıl'}
-                                                </>
-                                            )}
-                                        </button>
-                                    </div>
-                                )}
+                        {/* Empty state - for when nothing is selected and user has no participation */}
+                        {selectedParts.length === 0 && Object.values(selectedHizbs).every(arr => arr.length === 0) && (!myParticipation || myParticipation.myParts.length === 0) && (
+                            <div className="card-tertil p-4 text-center text-muted">
+                                <i className="bi bi-hand-index fs-1 mb-3 d-block text-tertil"></i>
+                                <h6 className="fw-semibold">Programa Katılın</h6>
+                                <p className="mb-0">Yukarıdan cüz veya hizb seçerek programa katılabilirsiniz.</p>
 
-                                {/* Show my participation */}
-                                {myParticipation && myParticipation.myParts.length > 0 && (
-                                    <div>
-                                        <h5 className="fw-bold text-dark mb-3">
-                                            {session ? 'Katılımınız' : 'Misafir Katılımınız'}
-                                        </h5>
-                                        <div className="alert alert-success d-flex align-items-center mb-3">
-                                            <i className="bi bi-check-circle me-2"></i>
-                                            Bu programda {myParticipation.myParts.length} kısım aldınız.
-                                            ({myParticipation.completedParts.length} tamamlandı)
-                                        </div>
-
-                                        {myParticipation.myParts.some(p => !myParticipation.completedParts.includes(p)) && (
-                                            <button
-                                                onClick={handleComplete}
-                                                disabled={processingComplete}
-                                                className="btn btn-gold btn-lg w-100"
-                                            >
-                                                {processingComplete ? (
-                                                    <>
-                                                        <span className="spinner-border spinner-border-sm me-2" role="status"></span>
-                                                        İşleniyor...
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <i className="bi bi-check-all me-2"></i>
-                                                        Tüm Okumalarımı Tamamla
-                                                    </>
-                                                )}
-                                            </button>
-                                        )}
-                                    </div>
-                                )}
-
-                                {/* Empty state */}
-                                {selectedParts.length === 0 && (!myParticipation || myParticipation.myParts.length === 0) && (
-                                    <div className="text-center text-muted py-3">
-                                        <i className="bi bi-hand-index fs-3 mb-2 d-block"></i>
-                                        <span>Yukarıdan kısımları seçerek programa katılabilirsiniz</span>
-
-                                        {authStatus === 'unauthenticated' && (
-                                            <div className="mt-3 small">
-                                                Hesabınız var mı? <Link href="/auth/login" className="text-tertil fw-bold">Giriş Yapın</Link>
-                                            </div>
-                                        )}
+                                {authStatus === 'unauthenticated' && (
+                                    <div className="mt-3">
+                                        Hesabınız var mı? <Link href="/auth/login" className="text-tertil fw-bold">Giriş Yapın</Link>
                                     </div>
                                 )}
                             </div>
@@ -877,33 +1073,308 @@ export default function ProgramDetailPage() {
                                 ) : participants.length === 0 ? (
                                     <p className="text-center text-muted py-4">Henüz katılımcı yok</p>
                                 ) : (
-                                    <div className="list-group list-group-flush">
-                                        {participants.map((p, idx) => (
-                                            <div key={idx} className="list-group-item px-0 py-3">
-                                                <div className="d-flex justify-content-between align-items-center">
-                                                    <div>
-                                                        <h6 className="mb-1 fw-semibold">{p.name}</h6>
-                                                        <small className="text-muted">
-                                                            {p.parts.map(part => program.programType === 'hatim' ? `${part}. Cüz` : `#${part}`).join(', ')}
-                                                        </small>
-                                                    </div>
-                                                    <div>
-                                                        {p.completedParts.length === p.parts.length ? (
-                                                            <span className="badge bg-success-soft text-success">
-                                                                <i className="bi bi-check-circle me-1"></i>
-                                                                Tamamlandı
-                                                            </span>
-                                                        ) : (
-                                                            <span className="badge bg-warning-soft text-warning">
-                                                                <i className="bi bi-hourglass-split me-1"></i>
-                                                                Okunuyor
-                                                            </span>
-                                                        )}
-                                                    </div>
+                                    <div>
+                                        {/* Group by Parts/Hizbs - Show each cuz/hizb separately */}
+                                        {(() => {
+                                            // Create a map of "partNumber" or "partNumber-hizbNumber" -> participants
+                                            const selectionMap: Record<string, { name: string; isCompleted: boolean }[]> = {};
+
+                                            participants.forEach(p => {
+                                                p.selections.forEach(sel => {
+                                                    const key = sel.hizbNumber
+                                                        ? `${sel.partNumber}-${sel.hizbNumber}`
+                                                        : `${sel.partNumber}`;
+                                                    if (!selectionMap[key]) {
+                                                        selectionMap[key] = [];
+                                                    }
+                                                    selectionMap[key].push({
+                                                        name: p.name,
+                                                        isCompleted: sel.isCompleted
+                                                    });
+                                                });
+                                            });
+
+                                            // Sort keys
+                                            const sortedKeys = Object.keys(selectionMap).sort((a, b) => {
+                                                const [aPart, aHizb] = a.split('-').map(Number);
+                                                const [bPart, bHizb] = b.split('-').map(Number);
+                                                if (aPart !== bPart) return aPart - bPart;
+                                                return (aHizb || 0) - (bHizb || 0);
+                                            });
+
+                                            return (
+                                                <div className="d-flex flex-column gap-2">
+                                                    {sortedKeys.map(key => {
+                                                        const [partNum, hizbNum] = key.split('-').map(Number);
+                                                        const label = hizbNum
+                                                            ? `${partNum}. Cüz - ${hizbNum}. Hizb`
+                                                            : program.programType === 'hatim' ? `${partNum}. Cüz` : `#${partNum}`;
+
+                                                        return (
+                                                            <div key={key} className="border rounded p-3">
+                                                                <div className="d-flex align-items-center justify-content-between mb-2">
+                                                                    <span className="fw-bold text-tertil">
+                                                                        <i className={`bi ${hizbNum ? 'bi-bookmark' : 'bi-book'} me-2`}></i>
+                                                                        {label}
+                                                                    </span>
+                                                                    <span className="badge bg-tertil">
+                                                                        {selectionMap[key].length} kişi
+                                                                    </span>
+                                                                </div>
+                                                                <div className="d-flex flex-wrap gap-2">
+                                                                    {selectionMap[key].map((participant, idx) => (
+                                                                        <span
+                                                                            key={idx}
+                                                                            className={`badge py-2 px-3 ${participant.isCompleted ? 'bg-success' : 'bg-secondary'}`}
+                                                                        >
+                                                                            {participant.isCompleted && <i className="bi bi-check-circle me-1"></i>}
+                                                                            {participant.name}
+                                                                        </span>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
                                                 </div>
-                                            </div>
-                                        ))}
+                                            );
+                                        })()}
+
+                                        {/* Also show by participant name */}
+                                        <hr className="my-4" />
+                                        <h6 className="fw-bold mb-3">
+                                            <i className="bi bi-people me-2"></i>
+                                            Katılımcılara Göre
+                                        </h6>
+                                        <div className="list-group list-group-flush">
+                                            {participants.map((p, idx) => {
+                                                const completedCount = p.selections.filter(s => s.isCompleted).length;
+                                                const totalCount = p.selections.length;
+
+                                                return (
+                                                    <div key={idx} className="list-group-item px-0 py-3">
+                                                        <div className="d-flex justify-content-between align-items-center">
+                                                            <div>
+                                                                <h6 className="mb-1 fw-semibold">{p.name}</h6>
+                                                                <div className="d-flex flex-wrap gap-1 mt-1">
+                                                                    {p.selections.map((sel, selIdx) => {
+                                                                        const label = sel.hizbNumber
+                                                                            ? `${sel.partNumber}. Cüz ${sel.hizbNumber}. Hizb`
+                                                                            : program.programType === 'hatim' ? `${sel.partNumber}. Cüz` : `#${sel.partNumber}`;
+                                                                        return (
+                                                                            <span
+                                                                                key={selIdx}
+                                                                                className={`badge ${sel.isCompleted ? 'bg-success' : 'bg-tertil'}`}
+                                                                            >
+                                                                                {label}
+                                                                                {sel.isCompleted && <i className="bi bi-check ms-1"></i>}
+                                                                            </span>
+                                                                        );
+                                                                    })}
+                                                                </div>
+                                                            </div>
+                                                            <div>
+                                                                {completedCount === totalCount ? (
+                                                                    <span className="badge bg-success-soft text-success">
+                                                                        <i className="bi bi-check-circle me-1"></i>
+                                                                        Tamamlandı
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className="badge bg-warning-soft text-warning">
+                                                                        <i className="bi bi-hourglass-split me-1"></i>
+                                                                        {completedCount}/{totalCount}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Completion Modal (for program owner) */}
+            {showCompletionModal && program.isCreator && (
+                <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+                    <div className="modal-dialog modal-dialog-centered modal-lg">
+                        <div className="modal-content" style={{ maxHeight: '80vh' }}>
+                            <div className="modal-header bg-success text-white">
+                                <h5 className="modal-title">
+                                    <i className="bi bi-check2-all me-2"></i>
+                                    Okuma Tamamlama
+                                </h5>
+                                <button
+                                    type="button"
+                                    className="btn-close btn-close-white"
+                                    onClick={() => {
+                                        setShowCompletionModal(false);
+                                        setCompletionSearch('');
+                                        setCompletingName(null);
+                                    }}
+                                ></button>
+                            </div>
+                            <div className="modal-body overflow-auto">
+                                {/* Search Input */}
+                                <div className="mb-4">
+                                    <div className="input-group">
+                                        <span className="input-group-text">
+                                            <i className="bi bi-search"></i>
+                                        </span>
+                                        <input
+                                            type="text"
+                                            className="form-control form-control-lg"
+                                            placeholder="Cüz numarası veya isim ile ara..."
+                                            value={completionSearch}
+                                            onChange={(e) => setCompletionSearch(e.target.value)}
+                                            autoFocus
+                                        />
+                                        {completionSearch && (
+                                            <button
+                                                className="btn btn-outline-secondary"
+                                                onClick={() => setCompletionSearch('')}
+                                            >
+                                                <i className="bi bi-x"></i>
+                                            </button>
+                                        )}
+                                    </div>
+                                    <div className="form-text">
+                                        💡 "2" yazarak 2. cüzü, "duygu" yazarak Duygu'yu filtreleyebilirsiniz
+                                    </div>
+                                </div>
+
+                                {loadingParticipants ? (
+                                    <div className="text-center py-4">
+                                        <div className="spinner-border text-success" role="status"></div>
+                                    </div>
+                                ) : (
+                                    (() => {
+                                        // Flatten all selections from all participants
+                                        const allSelections: {
+                                            participantName: string;
+                                            selection: PartSelection;
+                                            key: string;
+                                        }[] = [];
+
+                                        participants.forEach(p => {
+                                            p.selections.forEach(sel => {
+                                                allSelections.push({
+                                                    participantName: p.name,
+                                                    selection: sel,
+                                                    key: `${p.name}-${sel.partNumber}-${sel.hizbNumber || 0}`
+                                                });
+                                            });
+                                        });
+
+                                        // Filter based on search
+                                        const searchLower = completionSearch.toLowerCase().trim();
+                                        const filtered = allSelections.filter(item => {
+                                            if (!searchLower) return true;
+
+                                            // Check if search is a number (cuz search)
+                                            const searchNum = parseInt(searchLower);
+                                            if (!isNaN(searchNum)) {
+                                                return item.selection.partNumber === searchNum;
+                                            }
+
+                                            // Otherwise search by name
+                                            return item.participantName.toLowerCase().includes(searchLower);
+                                        });
+
+                                        // Sort: uncompleted first, then by part number
+                                        filtered.sort((a, b) => {
+                                            if (a.selection.isCompleted !== b.selection.isCompleted) {
+                                                return a.selection.isCompleted ? 1 : -1;
+                                            }
+                                            if (a.selection.partNumber !== b.selection.partNumber) {
+                                                return a.selection.partNumber - b.selection.partNumber;
+                                            }
+                                            return (a.selection.hizbNumber || 0) - (b.selection.hizbNumber || 0);
+                                        });
+
+                                        const uncompletedCount = filtered.filter(f => !f.selection.isCompleted).length;
+
+                                        return (
+                                            <>
+                                                <div className="d-flex justify-content-between align-items-center mb-3">
+                                                    <span className="text-muted">
+                                                        {filtered.length} sonuç bulundu
+                                                    </span>
+                                                    {uncompletedCount > 0 && (
+                                                        <span className="badge bg-warning">
+                                                            {uncompletedCount} tamamlanmamış
+                                                        </span>
+                                                    )}
+                                                </div>
+
+                                                {filtered.length === 0 ? (
+                                                    <div className="text-center text-muted py-4">
+                                                        <i className="bi bi-search fs-1 d-block mb-2"></i>
+                                                        Sonuç bulunamadı
+                                                    </div>
+                                                ) : (
+                                                    <div className="list-group">
+                                                        {filtered.map(item => {
+                                                            const label = item.selection.hizbNumber
+                                                                ? `${item.selection.partNumber}. Cüz - ${item.selection.hizbNumber}. Hizb`
+                                                                : `${item.selection.partNumber}. Cüz`;
+
+                                                            const isCompleting = completingName === item.key;
+
+                                                            return (
+                                                                <div
+                                                                    key={item.key}
+                                                                    className={`list-group-item d-flex justify-content-between align-items-center ${item.selection.isCompleted ? 'bg-light' : ''}`}
+                                                                >
+                                                                    <div>
+                                                                        <div className="d-flex align-items-center gap-2">
+                                                                            <i className={`bi ${item.selection.hizbNumber ? 'bi-bookmark' : 'bi-book'} text-tertil`}></i>
+                                                                            <span className="fw-semibold">{label}</span>
+                                                                        </div>
+                                                                        <small className="text-muted">{item.participantName}</small>
+                                                                    </div>
+                                                                    <div>
+                                                                        {item.selection.isCompleted ? (
+                                                                            <span className="badge bg-success">
+                                                                                <i className="bi bi-check-circle me-1"></i>
+                                                                                Tamamlandı
+                                                                            </span>
+                                                                        ) : (
+                                                                            <button
+                                                                                className="btn btn-success btn-sm"
+                                                                                disabled={isCompleting}
+                                                                                onClick={async () => {
+                                                                                    setCompletingName(item.key);
+                                                                                    await markParticipantComplete(
+                                                                                        item.participantName,
+                                                                                        [item.selection]
+                                                                                    );
+                                                                                    setCompletingName(null);
+                                                                                }}
+                                                                            >
+                                                                                {isCompleting ? (
+                                                                                    <span className="spinner-border spinner-border-sm"></span>
+                                                                                ) : (
+                                                                                    <>
+                                                                                        <i className="bi bi-check-lg me-1"></i>
+                                                                                        Tamamla
+                                                                                    </>
+                                                                                )}
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </>
+                                        );
+                                    })()
                                 )}
                             </div>
                         </div>
